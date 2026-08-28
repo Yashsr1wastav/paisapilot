@@ -1,0 +1,26 @@
+{
+  "name": "paisapilot-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "test": "vitest run ../tests/mobile-finance.test.ts ../tests/mobile-api.test.ts ../tests/mobile-navigation.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "^2.1.0",
+    "expo": "^53.0.0",
+    "expo-build-properties": "^0.13.0",
+    "expo-secure-store": "^14.2.0",
+    "react": "19.0.0",
+    "react-native": "0.79.2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^2.1.0"
+  }
+}

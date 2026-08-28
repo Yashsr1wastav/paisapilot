@@ -1,0 +1,3 @@
+export default function Home() {
+  return <main className="public-home"><a className="brand" href="/"><span>PP</span> paisapilot</a><div><p className="eyebrow">PERSONAL MONEY OS</p><h1>Make your money feel less mysterious.</h1><p>See where it goes, understand what matters, and make the next considered move.</p><a className="button primary" href="/dashboard">Open your workspace →</a></div><footer className="site-footer"><a href="/">PaisaPilot</a><a href="/privacy-policy">Privacy policy</a></footer></main>;
+}

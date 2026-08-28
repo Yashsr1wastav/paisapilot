@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "PaisaPilot",
+    "slug": "paisapilot",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "scheme": "paisapilot",
+    "android": { "package": "com.paisapilot.app", "versionCode": 1, "permissions": [] },
+    "plugins": [
+      [
+        "expo-build-properties",
+        { "android": { "compileSdkVersion": 35, "targetSdkVersion": 35, "buildToolsVersion": "35.0.0" } }
+      ]
+    ]
+  }
+}
