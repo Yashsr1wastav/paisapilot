@@ -50,6 +50,16 @@ describe('API authorization', () => {
     expect(registered.headers.get('access-control-allow-credentials')).toBeNull();
   });
 
+  it('prefers the active cookie session over a stale bearer token', async () => {
+    const first = await post('/v1/auth/register', { email: `cookie-first-${Date.now()}@example.com`, password: 'correct horse battery staple' });
+    const firstCookie = first.headers.get('set-cookie')!.split(';')[0]!;
+    const second = await post('/v1/auth/register', { email: `cookie-second-${Date.now()}@example.com`, password: 'correct horse battery staple' });
+    const secondBody = await second.json() as { token: string };
+    const session = await fetch(`${baseUrl}/v1/auth/session`, { headers: { cookie: firstCookie, authorization: `Bearer ${secondBody.token}` } });
+    expect(session.status).toBe(200);
+    expect((await session.json() as { user: { email: string } }).user.email).toContain('cookie-first-');
+  });
+
   it('does not expose bearer tokens to web auth responses', async () => {
     const response = await fetch(`${baseUrl}/v1/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-paisapilot-client': 'web' }, body: JSON.stringify({ email: `web-auth-${Date.now()}@example.com`, password: 'correct horse battery staple' }) });
     const payload = await response.json() as { user: { email: string }; token?: string };

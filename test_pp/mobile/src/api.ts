@@ -1,39 +1,48 @@
-import * as SecureStore from 'expo-secure-store';
+﻿import * as SecureStore from 'expo-secure-store';
 
-export const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://10.0.2.2:3000';
-const TOKEN_KEY = 'paisapilot.session';
+const BASE = process.env.EXPO_PUBLIC_API_URL ?? 'http://10.0.2.2:3000';
+const KEY = 'pp_token';
 
-export type ApiResponse<T> = T;
-export class ApiError extends Error {
-  constructor(message: string, readonly status: number) { super(message); }
-}
-export async function getToken(): Promise<string | null> { return SecureStore.getItemAsync(TOKEN_KEY); }
-export async function saveToken(token: string): Promise<void> { await SecureStore.setItemAsync(TOKEN_KEY, token); }
-export async function clearToken(): Promise<void> { await SecureStore.deleteItemAsync(TOKEN_KEY); }
-export async function deleteAccount(): Promise<void> { await api<{ deleted: boolean }>('/v1/privacy/delete', { method: 'DELETE' }); }
+export const getToken = () => SecureStore.getItemAsync(KEY);
+export const saveToken = (t: string) => SecureStore.setItemAsync(KEY, t);
+export const clearToken = () => SecureStore.deleteItemAsync(KEY);
 
-export async function api<T>(path: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
+export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await getToken();
-  const response = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}), ...options.headers }
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    if (response.status === 401) await clearToken();
-    throw new ApiError(payload.error?.message ?? 'Something went wrong. Check your connection.', response.status);
+  const headers = new Headers(init.headers);
+  headers.set('content-type', 'application/json');
+  if (token) headers.set('authorization', `Bearer ${token}`);
+
+  const res = await fetch(`${BASE}${path}`, { ...init, headers });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body?.error?.message ?? `HTTP ${res.status}`);
   }
-  return payload as T;
+
+  return res.json();
 }
 
-export async function validateSession(): Promise<boolean> {
-  if (!(await getToken())) return false;
-  await api('/v1/settings');
-  return true;
-}
-
-export async function authenticate(email: string, password: string, mode: 'login' | 'register'): Promise<{ user: { id: string; email: string }; token: string }> {
-  const result = await api<{ user: { id: string; email: string }; token: string }>(`/v1/auth/${mode}`, { method: 'POST', body: JSON.stringify({ email, password }) });
-  await saveToken(result.token);
+export async function authenticate(email: string, password: string, mode: 'login' | 'register') {
+  const result = await api<{ user: { id: string; email: string }; token: string }>(`/v1/auth/${mode}`, {
+    method: 'POST',
+    body: JSON.stringify({ email, password })
+  });
+  if (result.token) await saveToken(result.token);
   return result;
+}
+
+export async function validateSession(): Promise<{ id: string; email: string } | null> {
+  const token = await getToken();
+  if (!token) return null;
+  try {
+    const result = await api<{ user: { id: string; email: string } }>('/v1/auth/session');
+    return result.user ?? null;
+  } catch {
+    await clearToken();
+    return null;
+  }
+}
+
+export async function deleteAccount(): Promise<void> {
+  await api('/v1/privacy/delete', { method: 'DELETE' });
 }

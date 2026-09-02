@@ -11,15 +11,19 @@
     "check": "npm run typecheck && npm test"
   },
   "dependencies": {
-    "@react-native-async-storage/async-storage": "^2.1.0",
-    "expo": "^53.0.0",
-    "expo-build-properties": "^0.13.0",
-    "expo-secure-store": "^14.2.0",
-    "react": "19.0.0",
-    "react-native": "0.79.2"
+    "@react-navigation/bottom-tabs": "^6.6.1",
+    "@react-navigation/native": "^6.1.18",
+    "@react-navigation/stack": "^6.4.1",
+    "expo": "^54.0.37",
+    "expo-secure-store": "~15.0.8",
+    "expo-status-bar": "~3.0.9",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0"
   },
   "devDependencies": {
-    "@types/react": "^19.0.0",
+    "@types/react": "~19.1.10",
     "typescript": "^5.8.0",
     "vitest": "^2.1.0"
   }

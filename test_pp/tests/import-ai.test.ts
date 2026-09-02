@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { parseTransactionCsv } from '../src/import.js';
-import { AnthropicAiGateway, SafeAiGateway, validateAiAnswer } from '../src/ai.js';
+import { GeminiAiGateway, SafeAiGateway, validateAiAnswer } from '../src/ai.js';
 
 describe('boundaries', () => {
   it('parses valid CSV and rejects malformed types', () => { expect(parseTransactionCsv('date,description,amount,type\n2026-01-01,Tea,120.50,expense')).toEqual([{ occurredOn: '2026-01-01', description: 'Tea', amountPaise: 12050, kind: 'expense' }]); expect(() => parseTransactionCsv('date,description,amount,type\n2026-01-01,Tea,10,transfer')).toThrow(); });
@@ -30,11 +30,12 @@ describe('boundaries', () => {
     }
   });
   it('falls back when the provider returns unsafe structured output', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ content: [{ text: JSON.stringify({ label: 'fact', text: 'Buy this stock now.' }) }] }), { status: 200 }));
-    const answer = await new AnthropicAiGateway('test-key').answer('Summarize my cash flow', { cashFlow: 1 });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ label: 'fact', text: 'Buy this stock now.' }) }] } }] }), { status: 200 }));
+    const answer = await new GeminiAiGateway('test-key').answer('Summarize my cash flow', { cashFlow: 1 });
     expect(answer.label).toBe('fact');
     expect(answer.text).toMatch(/based on your recorded/i);
     expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('generativelanguage.googleapis.com');
     fetchMock.mockRestore();
   });
   it('rejects recommendation labels and malformed policy fields', () => {

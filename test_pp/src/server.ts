@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createSessionToken, normalizeEmail, passwordHash, requestId, verifyPassword } from './auth.js';
-import { AnthropicAiGateway, SafeAiGateway } from './ai.js';
+import { GeminiAiGateway, SafeAiGateway } from './ai.js';
 import { calculateCashFlow, calculateHealthScore, currentMonth, isValidCalendarDate, isValidMonth, MAX_AMOUNT_PAISE, transactionsForMonth } from './domain.js';
 import { parseTransactionCsv } from './import.js';
 import { MockDelayedMarketProvider } from './market.js';
@@ -20,14 +20,14 @@ function createConfiguredStore(): MemoryStore | PostgreSQLStore {
 }
 const store = createConfiguredStore();
 const storeReady = store.ready();
-const ai = process.env.ANTHROPIC_API_KEY ? new AnthropicAiGateway(process.env.ANTHROPIC_API_KEY, process.env.ANTHROPIC_MODEL) : new SafeAiGateway();
+const ai = process.env.GEMINI_API_KEY ? new GeminiAiGateway(process.env.GEMINI_API_KEY, process.env.GEMINI_MODEL) : new SafeAiGateway();
 const markets = new MockDelayedMarketProvider();
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? '127.0.0.1';
 const sessionTtl = Number(process.env.SESSION_TTL_HOURS ?? 24);
 const requestCounts = new Map<string, { count: number; resetAt: number }>();
 const maxBodyBytes = 2_100_000;
-const allowedOrigins = new Set((process.env.CORS_ORIGINS ?? process.env.CORS_ORIGIN ?? 'https://paisapilot.app,http://localhost:3001,http://localhost:8080').split(',').map((origin) => origin.trim()).filter(Boolean));
+const allowedOrigins = new Set((process.env.CORS_ORIGINS ?? process.env.CORS_ORIGIN ?? 'https://paisapilot.app,http://localhost:3001,http://localhost:8080').split(',').map((o) => o.trim()).filter(Boolean));
 
 function json(response: ServerResponse, status: number, payload: unknown): void { response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY' }); response.end(JSON.stringify(payload)); }
 function error(response: ServerResponse, status: number, message: string, id: string): void { json(response, status, { error: { message, requestId: id } }); }
@@ -41,11 +41,10 @@ function text(value: unknown, field: string, max = 200): string { if (typeof val
 function date(value: unknown, field: string): string { const result = text(value, field, 10); if (!isValidCalendarDate(result)) throw new Error(`${field} is invalid`); return result; }
 function balance(value: unknown): number { if (value === undefined) return 0; if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < -MAX_AMOUNT_PAISE || value > MAX_AMOUNT_PAISE) throw new Error('balancePaise is outside supported bounds'); return value; }
 function importFingerprint(userId: string, accountId: string, item: { occurredOn: string; description: string; amountPaise: number; kind: string; category?: string }): string { return createHash('sha256').update(JSON.stringify([userId, accountId, item.occurredOn, item.description, item.amountPaise, item.kind, item.category ?? ''])).digest('hex'); }
-function cookieValue(header: string | undefined, name: string): string | undefined { return header?.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1); }
+function cookieValue(header: string | undefined, name: string): string | undefined { return header?.split(';').map((p) => p.trim()).find((p) => p.startsWith(`${name}=`))?.slice(name.length + 1); }
 async function authUser(request: IncomingMessage, response: ServerResponse): Promise<string | undefined> { const cookie = cookieValue(request.headers.cookie, 'paisapilot_session'); const bearer = request.headers.authorization?.startsWith('Bearer ') ? request.headers.authorization.slice(7) : undefined; const userId = (bearer ? await store.authenticateSession(bearer) : undefined) ?? (cookie ? await store.authenticateSession(cookie) : undefined); if (!userId) error(response, 401, 'Authentication required', requestId()); return userId; }
 function sessionCookie(token: string, maxAge: number): string { return `paisapilot_session=${token}; Max-Age=${maxAge}; Path=/; HttpOnly; SameSite=${process.env.NODE_ENV === 'production' ? 'None' : 'Lax'}${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`; }
 function rateLimited(request: IncomingMessage): boolean { const key = request.socket.remoteAddress ?? 'unknown'; const now = Date.now(); const current = requestCounts.get(key); if (!current || current.resetAt <= now) { requestCounts.set(key, { count: 1, resetAt: now + 60_000 }); return false; } current.count += 1; return current.count > 120; }
-function resource<T extends { userId: string }>(collection: Map<string, T>, id: string, userId: string): T { const item = collection.get(id); if (!item || item.userId !== userId) throw new Error('Resource not found'); return item; }
 function period(url: URL): { month?: string; timeZone: string; selectedMonth: string } {
   const requestedMonth = url.searchParams.get('month') ?? undefined;
   if (requestedMonth !== undefined && !isValidMonth(requestedMonth)) throw new Error('month must use YYYY-MM format');
@@ -54,10 +53,12 @@ function period(url: URL): { month?: string; timeZone: string; selectedMonth: st
   const selectedMonth = requestedMonth ?? currentMonth(timeZone);
   return { month: requestedMonth, timeZone, selectedMonth };
 }
-function isCookieAuthenticated(request: IncomingMessage): boolean { return cookieValue(request.headers.cookie, 'paisapilot_session') !== undefined; }
 function enforceCsrf(request: IncomingMessage, response: ServerResponse, id: string): boolean {
   const method = request.method ?? 'GET';
-  if (!isCookieAuthenticated(request) || ['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
+  const hasCookie = cookieValue(request.headers.cookie, 'paisapilot_session') !== undefined;
+  const hasBearer = request.headers.authorization?.startsWith('Bearer ');
+  // CSRF only applies to cookie-authenticated requests without a bearer token
+  if (!hasCookie || hasBearer || ['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
   const origin = request.headers.origin;
   if (!origin || !allowedOrigins.has(origin)) { error(response, 403, 'CSRF validation failed', id); return false; }
   return true;
@@ -70,25 +71,41 @@ async function handler(request: IncomingMessage, response: ServerResponse): Prom
   const url = new URL(request.url ?? '/', `http://${host}`); const method = request.method ?? 'GET';
   const origin = request.headers.origin; const corsOrigin = origin && allowedOrigins.has(origin) ? origin : undefined;
   response.setHeader('vary', 'Origin');
-  if (corsOrigin) { response.setHeader('access-control-allow-origin', corsOrigin); response.setHeader('access-control-allow-credentials', 'true'); response.setHeader('access-control-expose-headers', 'X-Period'); response.setHeader('vary', 'Origin'); }
+  if (corsOrigin) { response.setHeader('access-control-allow-origin', corsOrigin); response.setHeader('access-control-allow-credentials', 'true'); response.setHeader('access-control-expose-headers', 'X-Period'); }
   if (method === 'OPTIONS') { response.writeHead(corsOrigin ? 204 : 403, corsOrigin ? { 'access-control-allow-origin': corsOrigin, 'access-control-allow-credentials': 'true', 'access-control-allow-headers': 'content-type, authorization, x-csrf-token, x-paisapilot-client', 'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS', vary: 'Origin' } : {}); return response.end(); }
   if (url.pathname === '/health' && method === 'GET') return json(response, 200, { status: 'ok', service: 'paisapilot-api' });
   try {
     const input = (method === 'GET' || method === 'DELETE') ? {} : await body(request);
+
     if (url.pathname === '/v1/auth/register' && method === 'POST') {
       const email = normalizeEmail(input.email); if (await store.findUserByEmail(email)) return error(response, 409, 'Email already registered', id);
-      const user = { id: store.createId(), email, passwordHash: passwordHash(input.password), createdAt: new Date().toISOString() }; const token = createSessionToken(); await store.withTransaction(async () => { await store.insertUser(user); await store.putSettings({ userId: user.id, currency: 'INR', aiEnabled: true, marketingEmails: false }); await store.createSession(token, user.id, Date.now() + sessionTtl * 3600000); }); response.setHeader('set-cookie', sessionCookie(token, sessionTtl * 3600)); return json(response, 201, request.headers['x-paisapilot-client'] === 'web' ? { user: { id: user.id, email: user.email } } : { user: { id: user.id, email: user.email }, token });
+      const user = { id: store.createId(), email, passwordHash: passwordHash(input.password), createdAt: new Date().toISOString() };
+      const token = createSessionToken();
+      await store.withTransaction(async () => { await store.insertUser(user); await store.putSettings({ userId: user.id, currency: 'INR', aiEnabled: true, marketingEmails: false }); await store.createSession(token, user.id, Date.now() + sessionTtl * 3600000); });
+      response.setHeader('set-cookie', sessionCookie(token, sessionTtl * 3600));
+      return json(response, 201, request.headers['x-paisapilot-client'] === 'web' ? { user: { id: user.id, email: user.email } } : { user: { id: user.id, email: user.email }, token });
     }
+
     if (url.pathname === '/v1/auth/login' && method === 'POST') {
-      const email = normalizeEmail(input.email); const user = await store.findUserByEmail(email); if (!user || !(await verifyPassword(input.password, user.passwordHash))) return error(response, 401, 'Invalid credentials', id);
-      const token = createSessionToken(); await store.createSession(token, user.id, Date.now() + sessionTtl * 3600000); response.setHeader('set-cookie', sessionCookie(token, sessionTtl * 3600)); return json(response, 200, request.headers['x-paisapilot-client'] === 'web' ? { user: { id: user.id, email: user.email } } : { user: { id: user.id, email: user.email }, token });
+      const email = normalizeEmail(input.email); const user = await store.findUserByEmail(email);
+      if (!user || !(await verifyPassword(input.password, user.passwordHash))) return error(response, 401, 'Invalid credentials', id);
+      const token = createSessionToken();
+      await store.createSession(token, user.id, Date.now() + sessionTtl * 3600000);
+      response.setHeader('set-cookie', sessionCookie(token, sessionTtl * 3600));
+      return json(response, 200, request.headers['x-paisapilot-client'] === 'web' ? { user: { id: user.id, email: user.email } } : { user: { id: user.id, email: user.email }, token });
     }
+
     if (url.pathname === '/v1/auth/session' && method === 'GET') {
-      const cookie = cookieValue(request.headers.cookie, 'paisapilot_session'); const userId = cookie ? await store.authenticateSession(cookie) : undefined; const user = userId ? await store.findUserById(userId) : undefined;
+      const cookie = cookieValue(request.headers.cookie, 'paisapilot_session');
+      const bearer = request.headers.authorization?.startsWith('Bearer ') ? request.headers.authorization.slice(7) : undefined;
+      const userId = (cookie ? await store.authenticateSession(cookie) : undefined) ?? (bearer ? await store.authenticateSession(bearer) : undefined);
+      const user = userId ? await store.findUserById(userId) : undefined;
       if (!user) return error(response, 401, 'Authentication required', id);
       return json(response, 200, { user: { id: user.id, email: user.email } });
     }
+
     if (url.pathname === '/v1/markets/quote' && method === 'GET') return json(response, 200, await markets.quote(url.searchParams.get('symbol') ?? ''));
+
     const userId = await authUser(request, response); if (!userId) return;
     if (!enforceCsrf(request, response, id)) return;
 
